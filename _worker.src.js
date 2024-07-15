@@ -1,7 +1,11 @@
-// src/worker.js
+// worker.src.js
 import { connect } from "cloudflare:sockets";
 let password = 'auto';
 let proxyIP = '';
+// The user name and password do not contain special characters
+// Setting the address will ignore proxyIP
+// Example:  user:pass@host:port  or  host:port
+let socks5Address = '';
 
 let addresses = [
 	//当sub为空时启用本地优选域名/优选IP，若不带端口号 TLS默认端口为443，#号后为备注别名
@@ -81,7 +85,7 @@ let addresses = [
 ];
 
 let sub = ''; 
-let subconverter = 'url.v1.mk';// clash订阅转换后端，目前使用肥羊的订阅转换功能。自带虚假节点信息防泄露
+let subconverter = 'subapi-loadbalancing.pages.dev';// clash订阅转换后端，目前使用CM的订阅转换功能。自带虚假节点信息防泄露
 let subconfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini.ini"; //订阅配置文件
 let RproxyIP = 'false';
 
@@ -101,11 +105,16 @@ let proxyIPs ;
 let sha224Password ;
 const expire = 4102329600;//2099-12-31
 const regex = /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[.*\]):?(\d+)?#?(.*)?$/;
+
 /*
 if (!isValidSHA224(sha224Password)) {
     throw new Error('sha224Password is not valid');
 }
 */
+
+let parsedSocks5Address = {}; 
+let enableSocks = false;
+
 export default {
 	async fetch(request, env, ctx) {
 		try {
@@ -114,6 +123,22 @@ export default {
 			proxyIP = env.PROXYIP || proxyIP;
 			proxyIPs = await ADD(proxyIP);
 			proxyIP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
+			socks5Address = env.SOCKS5 || socks5Address;
+			if (socks5Address) {
+				try {
+					parsedSocks5Address = socks5AddressParser(socks5Address);
+					RproxyIP = env.RPROXYIP || 'false';
+					enableSocks = true;
+				} catch (err) {
+  					/** @type {Error} */ 
+					let e = err;
+					console.log(e.toString());
+					RproxyIP = env.RPROXYIP || !proxyIP ? 'true' : 'false';
+					enableSocks = false;
+				}
+			} else {
+				RproxyIP = env.RPROXYIP || !proxyIP ? 'true' : 'false';
+			}
 			password = env.PASSWORD || password;
 			sha224Password = env.SHA224 || env.SHA224PASS || sha256.sha224(password);
 			//console.log(sha224Password);
@@ -127,6 +152,7 @@ export default {
 			BotToken = env.TGTOKEN || BotToken;
 			ChatID = env.TGID || ChatID; 
 			sub = env.SUB || sub;
+			if (url.searchParams.has('sub') && url.searchParams.get('sub') !== '') sub = url.searchParams.get('sub');
 			subconverter = env.SUBAPI || subconverter;
 			subconfig = env.SUBCONFIG || subconfig;
 			FileName = env.SUBNAME || FileName;
@@ -209,7 +235,31 @@ export default {
 				proxyIP = url.searchParams.get('proxyip') || proxyIP;
 				if (new RegExp('/proxyip=', 'i').test(url.pathname)) proxyIP = url.pathname.toLowerCase().split('/proxyip=')[1];
 				else if (new RegExp('/proxyip.', 'i').test(url.pathname)) proxyIP = `proxyip.${url.pathname.toLowerCase().split("/proxyip.")[1]}`;
-				else if (!proxyIP || proxyIP == '') proxyIP = 'proxyip.fxxk.dedyn.io';
+
+				socks5Address = url.searchParams.get('socks5') || socks5Address;
+				if (new RegExp('/socks5=', 'i').test(url.pathname)) socks5Address = url.pathname.split('5=')[1];
+				else if (new RegExp('/socks://', 'i').test(url.pathname) || new RegExp('/socks5://', 'i').test(url.pathname)) {
+					socks5Address = url.pathname.split('://')[1].split('#')[0];
+					if (socks5Address.includes('@')){
+						let userPassword = socks5Address.split('@')[0];
+						const base64Regex = /^(?:[A-Z0-9+/]{4})*(?:[A-Z0-9+/]{2}==|[A-Z0-9+/]{3}=)?$/i;
+						if (base64Regex.test(userPassword) && !userPassword.includes(':')) userPassword = atob(userPassword);
+						socks5Address = `${userPassword}@${socks5Address.split('@')[1]}`;
+					}
+				}
+				if (socks5Address) {
+					try {
+						parsedSocks5Address = socks5AddressParser(socks5Address);
+						enableSocks = true;
+					} catch (err) {
+						/** @type {Error} */ 
+						let e = err;
+						console.log(e.toString());
+						enableSocks = false;
+					}
+				} else {
+					enableSocks = false;
+				}
 				return await trojanOverWSHandler(request);
 			}
 		} catch (err) {
@@ -250,7 +300,8 @@ async function trojanOverWSHandler(request) {
 				message,
 				portRemote = 443,
 				addressRemote = "",
-				rawClientData
+				rawClientData,
+				addressType
 			} = await parseTrojanHeader(chunk);
 			address = addressRemote;
 			portWithRandomLog = `${portRemote}--${Math.random()} tcp`;
@@ -258,7 +309,7 @@ async function trojanOverWSHandler(request) {
 				throw new Error(message);
 				return;
 			}
-			handleTCPOutBound(remoteSocketWapper, addressRemote, portRemote, rawClientData, webSocket, log);
+			handleTCPOutBound(remoteSocketWapper, addressRemote, portRemote, rawClientData, webSocket, log, addressType);
 		},
 		close() {
 			log(`readableWebSocketStream is closed`);
@@ -368,25 +419,35 @@ async function parseTrojanHeader(buffer) {
 		hasError: false,
 		addressRemote: address,
 		portRemote,
-		rawClientData: socks5DataBuffer.slice(portIndex + 4)
+		rawClientData: socks5DataBuffer.slice(portIndex + 4),
+		addressType: atype
 	};
 }
 
-async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, log) {
-	async function connectAndWrite(address, port) {
-		const tcpSocket2 = connect({
+async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, log, addressType) {
+	async function connectAndWrite(address, port, socks = false) {
+		log(`connected to ${address}:${port}`);
+		//if (/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(address)) address = `${atob('d3d3Lg==')}${address}${atob('LmlwLjA5MDIyNy54eXo=')}`;
+		const tcpSocket2 = socks ? await socks5Connect(addressType, address, port, log)
+		: connect({
 			hostname: address,
 			port
 		});
 		remoteSocket.value = tcpSocket2;
-		log(`connected to ${address}:${port}`);
+		//log(`connected to ${address}:${port}`);
 		const writer = tcpSocket2.writable.getWriter();
 		await writer.write(rawClientData);
 		writer.releaseLock();
 		return tcpSocket2;
 	}
 	async function retry() {
-		const tcpSocket2 = await connectAndWrite(proxyIP || addressRemote, portRemote);
+		let tcpSocket2
+		if (enableSocks) {
+			tcpSocket2 = await connectAndWrite(addressRemote, portRemote, true);
+		} else {
+			if (!proxyIP || proxyIP == '') proxyIP = atob('cHJveHlpcC5meHhrLmRlZHluLmlv');
+			tcpSocket2 = await connectAndWrite(proxyIP || addressRemote, portRemote);
+		}
 		tcpSocket2.closed.catch((error) => {
 			console.log("retry tcpSocket closed error", error);
 		}).finally(() => {
@@ -580,9 +641,32 @@ async function getTrojanConfig(password, hostName, sub, UA, RproxyIP, _url) {
 	const Config = 配置信息(password , hostName);
 	const v2ray = Config[0];
 	const clash = Config[1];
-
+	let proxyhost = "";
+	if(hostName.includes(".workers.dev") || hostName.includes(".pages.dev")){
+		if ( proxyhostsURL && (!proxyhosts || proxyhosts.length == 0)) {
+			try {
+				const response = await fetch(proxyhostsURL); 
+			
+				if (!response.ok) {
+					console.error('获取地址时出错:', response.status, response.statusText);
+					return; // 如果有错误，直接返回
+				}
+			
+				const text = await response.text();
+				const lines = text.split('\n');
+				// 过滤掉空行或只包含空白字符的行
+				const nonEmptyLines = lines.filter(line => line.trim() !== '');
+			
+				proxyhosts = proxyhosts.concat(nonEmptyLines);
+			} catch (error) {
+				//console.error('获取地址时出错:', error);
+			}
+		} 
+		if (proxyhosts.length != 0) proxyhost = proxyhosts[Math.floor(Math.random() * proxyhosts.length)] + "/";
+	}
+	
 	if ( userAgent.includes('mozilla') && !subParams.some(_searchParams => _url.searchParams.has(_searchParams))) {
-		let surge = `Surge订阅地址:\nhttps://${hostName}/${password}?surge`;
+		let surge = `Surge订阅地址:\nhttps://${proxyhost}${hostName}/${password}?surge`;
 		if (hostName.includes(".workers.dev") || hostName.includes(".pages.dev")) surge = "Surge订阅必须绑定自定义域";
 		
 		let 订阅器 = `您的订阅内容由 ${sub} 提供维护支持, 自动获取ProxyIP: ${RproxyIP}`;
@@ -590,29 +674,30 @@ async function getTrojanConfig(password, hostName, sub, UA, RproxyIP, _url) {
 			if (!proxyIP || proxyIP =='') {
 				订阅器 = '您的订阅内容由 内置 addresses/ADD 参数提供, 当前使用的ProxyIP为空, 推荐您设置 proxyIP/PROXYIP ！！！';
 			} else {
-				订阅器 = `您的订阅内容由 内置 addresses/ADD 参数提供, 当前使用的ProxyIP： ${proxyIPs.join(',')}`;
+				订阅器 = `您的订阅内容由 内置 addresses/ADD 参数提供, 当前使用的ProxyIP: ${proxyIPs.join(', ')}`;
 			}
 		} else if (RproxyIP != 'true'){
-			订阅器 += `, 当前使用的ProxyIP： ${proxyIPs.join(',')}`;
+			if (enableSocks) 订阅器 += `, 当前使用的Socks5: ${parsedSocks5Address.hostname}:${String(parsedSocks5Address.port)}`;
+			else 订阅器 += `, 当前使用的ProxyIP: ${proxyIPs.join(', ')}`;
 		}
 		return `
 ################################################################
 Subscribe / sub 订阅地址, 支持 Base64、clash-meta、sing-box 订阅格式, ${订阅器}
 ---------------------------------------------------------------
 快速自适应订阅地址:
-https://${hostName}/${password}
+https://${proxyhost}${hostName}/${password}
+https://${proxyhost}${hostName}/${password}?sub
 
 Base64订阅地址:
-https://${hostName}/${password}?sub
-https://${hostName}/${password}?b64
-https://${hostName}/${password}?base64
+https://${proxyhost}${hostName}/${password}?b64
+https://${proxyhost}${hostName}/${password}?base64
 
 clash订阅地址:
-https://${hostName}/${password}?clash
+https://${proxyhost}${hostName}/${password}?clash
 
 singbox订阅地址:
-https://${hostName}/${password}?sb
-https://${hostName}/${password}?singbox
+https://${proxyhost}${hostName}/${password}?sb
+https://${proxyhost}${hostName}/${password}?singbox
 
 ${surge}
 ---------------------------------------------------------------
@@ -776,6 +861,16 @@ function subAddresses(host,pw,userAgent,newAddressesapi,newAddressescsv) {
 			address = match[1];
 			port = match[2] || port;
 			addressid = match[3] || address;
+		}
+
+		const httpsPorts = ["2053","2083","2087","2096","8443"];
+		if (!isValidIPv4(address) && port == "443") {
+			for (let httpsPort of httpsPorts) {
+				if (address.includes(httpsPort)) {
+					port = httpsPort;
+					break;
+				}
+			}
 		}
 		
 		let 伪装域名 = host ;
@@ -1540,4 +1635,185 @@ async function getSum(accountId, accountIndex, email, key, startDate, endDate) {
 	} catch (error) {
 		return [ 0, 0 ];
 	}
+}
+
+/**
+ * 
+ * @param {number} addressType
+ * @param {string} addressRemote
+ * @param {number} portRemote
+ * @param {function} log The logging function.
+ */
+async function socks5Connect(addressType, addressRemote, portRemote, log) {
+	const { username, password, hostname, port } = parsedSocks5Address;
+	// Connect to the SOCKS server
+	const socket = connect({
+		hostname,
+		port,
+	});
+
+	// Request head format (Worker -> Socks Server):
+	// +----+----------+----------+
+	// |VER | NMETHODS | METHODS  |
+	// +----+----------+----------+
+	// | 1  |    1     | 1 to 255 |
+	// +----+----------+----------+
+
+	// https://en.wikipedia.org/wiki/SOCKS#SOCKS5
+	// For METHODS:
+	// 0x00 NO AUTHENTICATION REQUIRED
+	// 0x02 USERNAME/PASSWORD https://datatracker.ietf.org/doc/html/rfc1929
+	const socksGreeting = new Uint8Array([5, 2, 0, 2]);
+
+	const writer = socket.writable.getWriter();
+
+	await writer.write(socksGreeting);
+	log('sent socks greeting');
+
+	const reader = socket.readable.getReader();
+	const encoder = new TextEncoder();
+	let res = (await reader.read()).value;
+	// Response format (Socks Server -> Worker):
+	// +----+--------+
+	// |VER | METHOD |
+	// +----+--------+
+	// | 1  |   1    |
+	// +----+--------+
+	if (res[0] !== 0x05) {
+		log(`socks server version error: ${res[0]} expected: 5`);
+		return;
+	}
+	if (res[1] === 0xff) {
+		log("no acceptable methods");
+		return;
+	}
+
+	// if return 0x0502
+	if (res[1] === 0x02) {
+		log("socks server needs auth");
+		if (!username || !password) {
+			log("please provide username/password");
+			return;
+		}
+		// +----+------+----------+------+----------+
+		// |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+		// +----+------+----------+------+----------+
+		// | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+		// +----+------+----------+------+----------+
+		const authRequest = new Uint8Array([
+			1,
+			username.length,
+			...encoder.encode(username),
+			password.length,
+			...encoder.encode(password)
+		]);
+		await writer.write(authRequest);
+		res = (await reader.read()).value;
+		// expected 0x0100
+		if (res[0] !== 0x01 || res[1] !== 0x00) {
+			log("fail to auth socks server");
+			return;
+		}
+	}
+
+	// Request data format (Worker -> Socks Server):
+	// +----+-----+-------+------+----------+----------+
+	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+	// +----+-----+-------+------+----------+----------+
+	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+	// +----+-----+-------+------+----------+----------+
+	// ATYP: address type of following address
+	// 0x01: IPv4 address
+	// 0x03: Domain name
+	// 0x04: IPv6 address
+	// DST.ADDR: desired destination address
+	// DST.PORT: desired destination port in network octet order
+
+	// addressType
+	// 0x01: IPv4 address
+	// 0x03: Domain name
+	// 0x04: IPv6 address
+	// 1--> ipv4  addressLength =4
+	// 2--> domain name
+	// 3--> ipv6  addressLength =16
+	let DSTADDR;	// DSTADDR = ATYP + DST.ADDR
+	switch (addressType) {
+		case 1:
+			DSTADDR = new Uint8Array(
+				[1, ...addressRemote.split('.').map(Number)]
+			);
+			break;
+		case 3:
+			DSTADDR = new Uint8Array(
+				[3, addressRemote.length, ...encoder.encode(addressRemote)]
+			);
+			break;
+		case 4:
+			DSTADDR = new Uint8Array(
+				[4, ...addressRemote.split(':').flatMap(x => [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2), 16)])]
+			);
+			break;
+		default:
+			log(`invild  addressType is ${addressType}`);
+			return;
+	}
+	const socksRequest = new Uint8Array([5, 1, 0, ...DSTADDR, portRemote >> 8, portRemote & 0xff]);
+	await writer.write(socksRequest);
+	log('sent socks request');
+
+	res = (await reader.read()).value;
+	// Response format (Socks Server -> Worker):
+	//  +----+-----+-------+------+----------+----------+
+	// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+	// +----+-----+-------+------+----------+----------+
+	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+	// +----+-----+-------+------+----------+----------+
+	if (res[1] === 0x00) {
+		log("socks connection opened");
+	} else {
+		log("fail to open socks connection");
+		return;
+	}
+	writer.releaseLock();
+	reader.releaseLock();
+	return socket;
+}
+
+
+/**
+ * 
+ * @param {string} address
+ */
+function socks5AddressParser(address) {
+	let [latter, former] = address.split("@").reverse();
+	let username, password, hostname, port;
+	if (former) {
+		const formers = former.split(":");
+		if (formers.length !== 2) {
+			throw new Error('Invalid SOCKS address format');
+		}
+		[username, password] = formers;
+	}
+	const latters = latter.split(":");
+	port = Number(latters.pop());
+	if (isNaN(port)) {
+		throw new Error('Invalid SOCKS address format');
+	}
+	hostname = latters.join(":");
+	const regex = /^\[.*\]$/;
+	if (hostname.includes(":") && !regex.test(hostname)) {
+		throw new Error('Invalid SOCKS address format');
+	}
+	//if (/^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(hostname)) hostname = `${atob('d3d3Lg==')}${hostname}${atob('LmlwLjA5MDIyNy54eXo=')}`;
+	return {
+		username,
+		password,
+		hostname,
+		port,
+	}
+}
+
+function isValidIPv4(address) {
+	const ipv4Regex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+	return ipv4Regex.test(address);
 }
