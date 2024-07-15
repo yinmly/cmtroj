@@ -9,29 +9,29 @@ let socks5Address = '';
 
 let addresses = [
 	//当sub为空时启用本地优选域名/优选IP，若不带端口号 TLS默认端口为443，#号后为备注别名
-	'cdnhk.huabuxiang.vip:8443#优选01',
+	'ali.055500.xyz:2053#优选01',
 'dnschecker.org:2096#优选02',
 'download.yunzhongzhuan.com#优选03',
 'edtunnel-dgp.pages.dev#优选04',
 'fbi.gov:2087#优选05',
 'iplocation.io:2053#优选06',
 'log.bpminecraft.com#优选07',
-'sp.rweek.top#优选08',
+'skk.moe#优选08',
 'steamdb.info:2096#优选09',
 'tasteatlas.com:8443#优选10',
 'www.4chan.org:8443#优选11',
 'www.baipiao.eu.org:2087#优选12',
-'www.csgo.com:8443#优选13',
+'www.glassdoor.com#优选13',
 'www.d-555.com:2096#优选14',
 'www.digitalocean.com:2053#优选15',
 'www.ipchicken.com:2087#优选16',
 'www.okcupid.com:8443#优选17',
 'www.pcmag.com#优选18',
 'www.sean-now.com:2083#优选19',
-'www.shopify.com:2096#优选20',
+'cf.090227.xyz#优选20',
 'www.udacity.com:2053#优选21',
 'www.udemy.com:2083#优选22',
-'www.visa.co.jp:2053#优选23',
+'whatismyipaddress.com#优选23',
 'www.visa.com#优选24',
 'www.visa.com.sg#优选25',
 'www.visa.com.tw:8443#优选26',
@@ -39,13 +39,6 @@ let addresses = [
 'www.whatismyip.com:8443#优选28',
 'www.whoer.net:2053#优选29',
 'www.wto.org:8443#优选30',
-'ali.055500.xyz:2053优选31',
-'www.glassdoor.com#优选32',
-'www.who.int#优选33',
-'skk.moe#优选34',
-'whatismyipaddress.com#优选35',
-'cf.090227.xyz#优选36',
-	
 ];
 
 let sub = ''; 
@@ -53,7 +46,9 @@ let subconverter = 'subapi-loadbalancing.pages.dev';// clash订阅转换后端�
 let subconfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini.ini"; //订阅配置文件
 let RproxyIP = 'false';
 
-let addressesapi = [];
+let addressesapi = [
+	'https://txtkv-1tn.pages.dev/cmtr.txt?token=yml59',
+];
 let addressescsv = [];
 let DLS = 8;
 
