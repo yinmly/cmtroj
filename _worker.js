@@ -39,7 +39,13 @@ let addresses = [
 'www.whatismyip.com:8443#优选28',
 'www.whoer.net:2053#优选29',
 'www.wto.org:8443#优选30',
-
+'ali.055500.xyz:2053优选31',
+'www.glassdoor.com#优选32',
+'www.who.int#优选33',
+'skk.moe#优选34',
+'whatismyipaddress.com#优选35',
+'cf.090227.xyz#优选36',
+	
 ];
 
 let sub = ''; 
